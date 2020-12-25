@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"github.com/yametech/fuxi/pkg/api/common"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -14,7 +15,7 @@ func (w *WorkloadsAPI) GetDaemonSet(g *gin.Context) {
 	name := g.Param("name")
 	item, err := w.daemonSet.Get(namespace, name)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ResourceNotFoundError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, item)
@@ -22,20 +23,20 @@ func (w *WorkloadsAPI) GetDaemonSet(g *gin.Context) {
 
 // List DaemonSet
 func (w *WorkloadsAPI) ListDaemonSet(g *gin.Context) {
-	list, err := w.daemonSet.List("", "", 0, 0, nil)
+	list, err := resourceList(g, w.daemonSet)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	daemonSetList := &v1.DaemonSetList{}
 	marshalData, err := json.Marshal(list)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	err = json.Unmarshal(marshalData, daemonSetList)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, daemonSetList)

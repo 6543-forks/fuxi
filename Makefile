@@ -77,5 +77,27 @@ generate:
 up: generate
 	operator-sdk up local
 
-gen-crd-client:
-	hack/generate-groups.sh all github.com/yametech/fuxi/pkg/client github.com/yametech/fuxi/pkg/apis fuxi:v1
+
+
+gateway:
+	docker build -t yametech/gateway:v0.1.0 -f Dockerfile.gateway .
+	docker push yametech/gateway:v0.1.0
+
+workload:
+	docker build -t yametech/workload:v0.1.0 -f Dockerfile.workload .
+	docker push yametech/workload:v0.1.0 
+
+base:
+	docker build -t yametech/base:v0.1.0 -f Dockerfile.base .
+	docker push yametech/base:v0.1.0
+
+webhook:
+	docker build -t yametech/webhook:v0.1.0 -f Dockerfile.webhook .
+	docker push yametech/webhook:v0.1.0
+
+docker-build: gateway base workload	webhook
+	@echo "Docker build done"
+	
+
+xx:
+	docker build -t harbor.ym/devops/gateway:0.1.2 -f Dockerfile.gateway .

@@ -13,9 +13,11 @@ type WorkloadsSpec struct {
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
 	// Workloads ResourceType [Deployment,Statefulset...]
-	ResourceType      string `json:"resourceType"`
-	GenerateTimestamp int64  `json:"generateTimestamp"`
-	Metadata          string `json:"metadata"`
+	AppName      *string `json:"appName"`
+	ResourceType *string `json:"resourceType"`
+	Metadata     *string `json:"metadata"`
+	Service      *string `json:"service"`
+	VolumeClaims string  `json:"volumeClaims"`
 }
 
 // WorkloadsStatus defines the observed state of Workloads

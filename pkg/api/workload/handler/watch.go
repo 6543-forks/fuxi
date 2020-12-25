@@ -2,16 +2,20 @@ package handler
 
 import (
 	"fmt"
-	"github.com/gin-gonic/gin"
-	workloadservice "github.com/yametech/fuxi/pkg/service/workload"
+	constraint_common "github.com/yametech/fuxi/common"
+	"github.com/yametech/fuxi/pkg/service/common"
 	"io"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	watch "k8s.io/apimachinery/pkg/watch"
+	corev1 "k8s.io/api/core/v1"
 	"log"
 	"net/url"
 	"strings"
 	"sync"
+
+	"github.com/gin-gonic/gin"
+	workloadservice "github.com/yametech/fuxi/pkg/service/workload"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	watch "k8s.io/apimachinery/pkg/watch"
 )
 
 type Event struct {
@@ -36,25 +40,23 @@ func parseForApiUrl(apiUrl string) (gvr *schema.GroupVersionResource, namespace 
 		return nil, "", "", fmt.Errorf("parse url error")
 	}
 	switch paths[0] {
-	case "api":
+	case "api": //  eg: /api/v1/pods
 		gvr.Group = ""
 		gvr.Version = paths[1]
 		gvr.Resource = paths[2]
-		// /api/v1/watch/namespaces/{namespaces}/pods
-		if len(paths) >= 6 && paths[3] == "namespaces" {
-			namespace = paths[4]
+		if len(paths) == 5 {
+			//  eg: /api/v1/namespaces/dxp/pods
+			gvr.Resource = paths[4]
+			namespace = paths[3]
 		}
-	case "apis":
-		if paths[1] == "crd" {
-			// /apis/crd/nuwa.nip.io/v1/waters?watch=1&resourceVersion=5738162
-			remove(paths, 1)
-		}
+	case "apis": // eg: /apis/apps/v1/deployments
 		gvr.Group = paths[1]
 		gvr.Version = paths[2]
 		gvr.Resource = paths[3]
-		// /apis/apps/v1/watch/namespaces/{namespaces}/deployments
-		if len(paths) >= 7 && paths[4] == "namespaces" {
-			namespace = paths[5]
+		// eg: /apis/apps/v1/namespaces/dxp/deployments
+		if len(paths) == 6 {
+			gvr.Resource = paths[5]
+			namespace = paths[4]
 		}
 
 	default:
@@ -93,11 +95,34 @@ func listenByApis(event *workloadservice.Generic, g *gin.Context, eventChan chan
 			return
 		}
 		event.SetGroupVersionResource(*gvr)
-		k8sWatchChan, err := event.Watch(ns, rv, 0, nil)
+		if rv == "" {
+			log.Printf("watch for gvr: %s stream error: %s for api request %s \r\n", gvr, err, api)
+			continue
+		}
+
+		var k8sWatchChan <-chan watch.Event
+		// Redirect fuxi.nip.io/workload resources
+		if ns != "" && gvr.Group == "fuxi.nip.io" && gvr.Resource == "workloads" {
+			k8sWatchChan, err = event.Watch(constraint_common.WorkloadsDeployTemplateNamespace, rv, 0, fmt.Sprintf("namespace=%s", ns))
+		} else if gvr.Resource == "secrets" {
+			labelSelector := fmt.Sprintf("tekton!=%s", "1")
+			if ns != "" {
+				labelSelector = fmt.Sprintf("hide!=%s,%s", "1", labelSelector)
+			}
+			k8sWatchChan, err = event.Watch(ns, rv, 0, labelSelector)
+		} else if gvr.Resource == "ops-secrets" {
+			gvr.Resource = "secrets"
+			event.SetGroupVersionResource(*gvr)
+			k8sWatchChan, err = event.Watch(ns, rv, 0, fmt.Sprintf("tekton=%s", "1"))
+		} else {
+			k8sWatchChan, err = event.Watch(ns, rv, 0, nil)
+		}
+
 		if err != nil {
 			log.Printf("watch for gvr: %s stream error: %s for api request %s \r\n", gvr, err, api)
 			continue
 		}
+
 		go func() {
 			defer wg.Done()
 			for {
@@ -109,6 +134,9 @@ func listenByApis(event *workloadservice.Generic, g *gin.Context, eventChan chan
 				case item, ok := <-k8sWatchChan:
 					if !ok {
 						return
+					}
+					if insectionEventObject(eventChan, item) {
+						continue
 					}
 					eventChan <- Event{
 						Type:   item.Type,
@@ -122,7 +150,7 @@ func listenByApis(event *workloadservice.Generic, g *gin.Context, eventChan chan
 }
 
 // watchStream watch api request resource group and the version
-// after server timeout then close send closed event to client side server watcher close
+// after server timeout then close send closed event to clientv2 side server watcher close
 func (w *WorkloadsAPI) WatchStream(g *gin.Context) {
 	eventChan := make(chan Event, 32)
 	closed := make(chan struct{})
@@ -148,4 +176,25 @@ func (w *WorkloadsAPI) WatchStream(g *gin.Context) {
 		}
 		return true
 	})
+}
+
+func insectionEventObject(eventChan chan Event, item watch.Event) bool {
+	if item.Object.GetObjectKind().GroupVersionKind().Kind == "Secret" {
+		secret := &corev1.Secret{}
+		if err := common.RuntimeObjectToInstanceObj(item.Object.DeepCopyObject(), secret); err != nil {
+			return false
+		}
+		labels := secret.GetLabels()
+		if _, exist := labels["tekton"]; !exist {
+			return false
+		}
+		selfLink := secret.GetSelfLink()
+		secret.SetSelfLink(strings.Replace(selfLink, "/secrets", "/ops-secrets", 1))
+		eventChan <- Event{
+			Type:   item.Type,
+			Object: secret,
+		}
+		return true
+	}
+	return false
 }

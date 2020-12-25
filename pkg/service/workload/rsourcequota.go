@@ -1,15 +1,18 @@
 package workload
 
-import dyn "github.com/yametech/fuxi/pkg/kubernetes/client"
+import (
+	"github.com/yametech/fuxi/pkg/kubernetes/types"
+	"github.com/yametech/fuxi/pkg/service/common"
+)
 
 // ResourceQuota the kubernetes native resource resource quota
 type ResourceQuota struct {
-	WorkloadsResourceHandler
+	common.WorkloadsResourceHandler
 }
 
 // NewResourceQuota exported
 func NewResourceQuota() *ResourceQuota {
-	return &ResourceQuota{&defaultImplWorkloadsResourceHandler{
-		dyn.ResourceResourceQuota,
+	return &ResourceQuota{&common.DefaultImplWorkloadsResourceHandler{
+		types.ResourceResourceQuota,
 	}}
 }

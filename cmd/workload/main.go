@@ -2,20 +2,20 @@ package main
 
 import (
 	"fmt"
-	//"log"
 	"net/http"
+	"os"
 
-	"github.com/afex/hystrix-go/hystrix"
+	"k8s.io/client-go/dynamic"
+
+	"github.com/yametech/fuxi/pkg/app/helm"
+	"helm.sh/helm/v3/pkg/action"
+
 	"github.com/gin-gonic/gin"
 	"github.com/micro/go-micro/util/log"
 	"github.com/micro/go-micro/web"
-	hystrixplugin "github.com/micro/go-plugins/wrapper/breaker/hystrix"
 	"github.com/yametech/fuxi/pkg/api/workload/handler"
-	"github.com/yametech/fuxi/pkg/k8s/client"
-	dyn "github.com/yametech/fuxi/pkg/kubernetes/client"
 	"github.com/yametech/fuxi/pkg/preinstall"
-	workloadservice "github.com/yametech/fuxi/pkg/service/workload"
-	"github.com/yametech/fuxi/thirdparty/lib/wrapper/tracer/opentracing/gin2micro"
+	"github.com/yametech/fuxi/pkg/service/common"
 
 	// swagger doc
 	file "github.com/swaggo/files"
@@ -38,26 +38,27 @@ const (
 )
 
 func initNeed() (web.Service, *gin.Engine, *gin.RouterGroup, *handler.WorkloadsAPI) {
-	service, _, err := preinstall.InitApi(50, name, ver, "")
+	service, apiInstallConfigure, err := preinstall.InitApi(50, name, ver, "")
 	if err != nil {
 		panic(err)
 	}
-
-	hystrix.DefaultTimeout = 5000
-	wrapper := hystrixplugin.NewClientWrapper()
-	_ = wrapper
-
 	router := gin.Default()
-	router.Use(gin2micro.TracerWrapper)
-
-	err = workloadservice.NewK8sClientSet(dyn.SharedCacheInformerFactory, client.K8sClient, client.RestConf)
-	if err != nil {
-		panic(err)
+	common.SharedK8sClient = &apiInstallConfigure.DefaultInstallConfigure
+	client := apiInstallConfigure.ClientV1
+	restConfig := apiInstallConfigure.RestConfig
+	handler.CreateSharedSessionManager(client, restConfig)
+	workloadsApi := handler.NewWorkladAPI()
+	workloadsApi.HarborAddress = os.Getenv("HARBORADDRESS") + "chartrepo/" + os.Getenv("HARBORREPONAME")
+	workloadsApi.ActionInstance = func(namespace string) *action.Configuration {
+		actionConfig, err := helm.NewActionConfigWithSecret(restConfig, client, namespace)
+		if err != nil {
+			panic(err)
+		}
+		return actionConfig
 	}
-
-	handler.CreateSharedSessionManager(client.K8sClient, client.RestConf)
-
-	return service, router, router.Group("/workload"), handler.NewWorkladAPI()
+	workloadsApi.DynamicClient = dynamic.NewForConfigOrDie(restConfig)
+	workloadsApi.RestConfig = restConfig
+	return service, router, router.Group("/workload"), workloadsApi
 }
 
 var service, router, group, workloadsAPI = initNeed()
@@ -81,8 +82,10 @@ func main() {
 	{
 		serveHttp := WrapH(handler.CreateAttachHandler("/workload/shell/pod"))
 		router.GET("/workload/shell/pod/*path", serveHttp)
-		group.GET("/attach/namespace/:namespace/pod/:name/container/:container", PodAttach)
+		group.GET("/attach/namespace/:namespace/pod/:name/container/:container/:shelltype", PodAttach)
+
 		group.GET("/api/v1/pods", PodList)
+		group.GET("/api/v1/namespaces/:namespace/pods", PodList)
 		group.GET("/api/v1/namespaces/:namespace/pods/:name", PodGet)
 		group.GET("/api/v1/namespaces/:namespace/pods/:name/log", PodLog)
 	}
@@ -91,6 +94,7 @@ func main() {
 	{
 		group.GET("/api/v1/nodes", NodeList)
 		group.GET("/api/v1/nodes/:node", NodeGet)
+		group.POST("/node/annotation/geo", NodeGeoAnnotate)
 	}
 
 	// PersistentVolume
@@ -103,18 +107,21 @@ func main() {
 	// PersistentVolumeClaims
 	{
 		group.GET("/api/v1/persistentvolumeclaims", PersistentVolumeClaimsList)
+		group.GET("/api/v1/namespaces/:namespace/persistentvolumeclaims", PersistentVolumeClaimsList)
 		group.GET("/api/v1/namespaces/:namespace/persistentvolumeclaims/:name", PersistentVolumeClaimsGet)
 	}
 
 	// Event
 	{
 		group.GET("/api/v1/events", EventList)
-		group.GET("/api/v1/namespace/:namespace/event/:name", EventGet)
+		group.GET("/api/v1/namespaces/:namespace/events", EventList)
+		group.GET("/api/v1/namespaces/:namespace/events/:name", EventGet)
 	}
 
 	// ResourceQuota
 	{
 		group.GET("/api/v1/resourcequotas", ResourceQuotaList)
+		group.GET("/api/v1/namespaces/:namespace/resourcequotas", ResourceQuotaList)
 		group.GET("/api/v1/namespaces/:namespace/resourcequotas/:name", ResourceQuotaGet)
 		group.POST("/api/v1/namespaces/:namespace/resourcequotas", workloadsAPI.Apply)
 	}
@@ -122,12 +129,14 @@ func main() {
 	// Service
 	{
 		group.GET("/api/v1/services", ServiceList)
+		group.GET("/api/v1/namespaces/:namespace/services", ServiceList)
 		group.GET("/api/v1/namespaces/:namespace/services/:name", ServiceGet)
 	}
 
 	// Endpoint
 	{
 		group.GET("/api/v1/endpoints", EndpointList)
+		group.GET("/api/v1/namespaces/:namespace/endpoints", EndpointList)
 		group.GET("/api/v1/namespaces/:namespace/endpoints/:name", EndpointGet)
 	}
 
@@ -135,35 +144,43 @@ func main() {
 	{
 		group.GET("/api/v1/serviceaccounts", ServiceAccountList)
 		group.GET("/api/v1/namespaces/:namespace/serviceaccounts/:name", ServiceAccountGet)
-		group.POST("/api/v1/namespaces/:namespace/serviceaccounts", workloadsAPI.Apply)
-	}
-	// ClusterRolebind
-	{
-		group.GET("/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", ClusterRoleBindList)
-		group.GET("/apis/rbac.authorization.k8s.io/v1/namespaces/:namespace/clusterrolebindings/:name ", ClusterRoleBindGet)
+		group.POST("/serviceaccount/patch/:method", ServiceAccountPatchSecret)
+		//group.POST("/api/v1/namespaces/:namespace/serviceaccounts", workloadsAPI.Apply)
 	}
 
 	// ConfigMaps
 	{
 		group.GET("/api/v1/configmaps", ConfigMapsList)
+		group.GET("/api/v1/namespaces/:namespace/configmaps", ConfigMapsList)
 		group.GET("/api/v1/namespaces/:namespace/configmaps/:name", ConfigMapsGet)
+		group.POST("/api/v1/namespaces/:namespace/configmaps", ConfigMapsCreate)
 	}
 
 	// Secret
 	{
 		group.GET("/api/v1/secrets", SecretList)
+		group.GET("/api/v1/namespaces/:namespace/secrets", SecretList)
+		group.GET("api/v1/ops-secrets", OpsSecretList)
+		group.GET("api/v1/namespaces/:namespace/ops-secrets", OpsSecretList)
 		group.GET("/api/v1/namespaces/:namespace/secrets/:name", SecretGet)
+
+		group.POST("/api/v1/namespaces/:namespace/secrets", SecretCreate)
+		group.POST("/api/v1/namespaces/:namespace/ops-secrets", SecretCreate)
+
+		group.PUT("/api/v1/namespaces/:namespace/secrets/:name", SecretUpdate)
+		group.PUT("/api/v1/namespaces/:namespace/ops-secrets/:name", SecretUpdate)
+		group.PUT("/api/v1/namespaces/:namespace/secrets", SecretUpdate)
+		group.PUT("/api/v1/namespaces/:namespace/ops-secrets", SecretUpdate)
 	}
 
 	// #apis
 	// #apps v1
-
 	// Deployment
 	{
 		group.GET("/apis/apps/v1/deployments", DeploymentList)
+		group.GET("/apis/apps/v1/namespaces/:namespace/deployments", DeploymentList)
 		group.GET("/apis/apps/v1/namespaces/:namespace/deployments/:name", DeploymentGet)
 		// deployment scale
-
 		group.GET("/apis/apps/v1/namespaces/:namespace/deployments/:name/scale", workloadsAPI.GetDeploymentScale)
 		group.PUT("/apis/apps/v1/namespaces/:namespace/deployments/:name/scale", workloadsAPI.PutDeploymentScale)
 	}
@@ -171,24 +188,48 @@ func main() {
 	// ReplicaSet
 	{
 		group.GET("/apis/apps/v1/replicasets", ReplicaSetList)
+		group.GET("/apis/apps/v1/namespaces/:namespace/replicasets", ReplicaSetList)
 		group.GET("/apis/apps/v1/namespaces/:namespace/replicasets/:name", ReplicaSetGet)
 	}
 
 	// StatefulSet
 	{
 		group.GET("/apis/apps/v1/statefulsets", StatefulSetList)
+		group.GET("/apis/apps/v1/namespaces/:namespace/statefulsets", StatefulSetList)
 		group.GET("/apis/apps/v1/namespaces/:namespace/statefulsets/:name", StatefulSetGet)
+	}
+
+	// Stone
+	{
+		group.GET("/apis/nuwa.nip.io/v1/stones", StoneList)
+		group.GET("/apis/nuwa.nip.io/v1/namespaces/:namespace/stones", StoneList)
+		group.GET("/apis/nuwa.nip.io/v1/namespaces/:namespace/stones/:name", StoneGet)
+	}
+
+	// Water
+	{
+		group.GET("/apis/nuwa.nip.io/v1/waters", WaterList)
+		group.GET("/apis/nuwa.nip.io/v1/namespaces/:namespace/waters", WaterList)
+		group.GET("/apis/nuwa.nip.io/v1/namespaces/:namespace/waters/:name", WaterGet)
+	}
+
+	{
+		group.GET("/apis/nuwa.nip.io/v1/injectors", InjectorList)
+		group.GET("/apis/nuwa.nip.io/v1/namespaces/:namespace/injectors", InjectorList)
+		group.GET("/apis/nuwa.nip.io/v1/namespaces/:namespace/injectors/:name", InjectorGet)
 	}
 
 	// StatefulSet1
 	{
 		group.GET("/apis/nuwa.nip.io/v1/statefulsets", StatefulSet1List)
+		group.GET("/apis/nuwa.nip.io/v1/namespaces/:namespace/statefulsets", StatefulSet1List)
 		group.GET("/apis/nuwa.nip.io/v1/namespaces/:namespace/statefulsets/:name", StatefulSet1Get)
 	}
 
 	// DaemonSet
 	{
 		group.GET("/apis/apps/v1/daemonsets", DaemonSetList)
+		group.GET("/apis/apps/v1/namespaces/:namespace/daemonsets", DaemonSetList)
 		group.GET("/apis/apps/v1/namespaces/:namespace/daemonsets/:name", DaemonSetGet)
 	}
 
@@ -198,6 +239,7 @@ func main() {
 	// CronJob
 	{
 		group.GET("/apis/batch/v1beta1/cronjobs", CronJobList)
+		group.GET("/apis/batch/v1beta1/namespaces/:namespace/cronjobs", CronJobList)
 		group.GET("/apis/batch/v1beta1/namespaces/:namespace/cronjobs/:name", CronJobGet)
 	}
 
@@ -205,7 +247,8 @@ func main() {
 
 	// Job
 	{
-		group.GET("/apis/batch/v1/jobs", JobList) //TODO fix route
+		group.GET("/apis/batch/v1/jobs", JobList)
+		group.GET("/apis/batch/v1/namespaces/:namespace/jobs", JobList)
 		group.GET("/apis/batch/v1/namespaces/:namespace/jobs/:name", JobGet)
 	}
 
@@ -215,7 +258,9 @@ func main() {
 	// Ingress
 	{
 		group.GET("/apis/extensions/v1beta1/ingresses", IngressList)
+		group.GET("/apis/extensions/v1beta1/namespaces/:namespace/ingresses", IngressList)
 		group.GET("/apis/extensions/v1beta1/namespaces/:namespace/ingresses/:name", IngressGet)
+		group.POST("/apis/extensions/v1beta1/namespaces/:namespace/ingresses", workloadsAPI.Apply)
 	}
 
 	// #networking.k8s.io
@@ -224,6 +269,7 @@ func main() {
 	// NetworkPolicy
 	{
 		group.GET("/apis/networking.k8s.io/v1/networkpolicies", NetworkPolicyList)
+		group.GET("/apis/networking.k8s.io/v1/namespaces/:namespace/networkpolicies", NetworkPolicyList)
 		group.GET("/apis/networking.k8s.io/v1/namespaces/:namespace/networkpolicies/:name", NetworkPolicyGet)
 	}
 
@@ -232,6 +278,7 @@ func main() {
 	{
 		group.GET("/apis/storage.k8s.io/v1/storageclasses", StorageClassList)
 		group.GET("/apis/storage.k8s.io/v1/storageclasses/:name", StorageClassGet)
+		group.POST("/apis/storage.k8s.io/v1/storageclasses", workloadsAPI.Apply)
 	}
 
 	// #autoscaling
@@ -239,34 +286,94 @@ func main() {
 	// HorizontalPodAutoscaler
 	{
 		group.GET("/apis/autoscaling/v2beta1/horizontalpodautoscalers", HorizontalPodAutoscalerList)
+		group.GET("/apis/autoscaling/v2beta1/namespaces/:namespace/horizontalpodautoscalers", HorizontalPodAutoscalerList)
 		group.GET("/apis/autoscaling/v2beta1/namespaces/:namespace/horizontalpodautoscalers/:name", HorizontalPodAutoscalerGet)
 	}
 
+	// kubernetes RBAC
+	// #rbac.authorization.k8s.io
+	// v1
+	// Roles
+	{
+		group.GET("/apis/rbac.authorization.k8s.io/v1/roles", RoleList)
+		group.GET("/apis/rbac.authorization.k8s.io/v1/namespaces/:namespace/roles", RoleList)
+		group.GET("/apis/rbac.authorization.k8s.io/v1/namespaces/:namespace/roles/:name", RoleGet)
+	}
 	// #rbac.authorization.k8s.io
 	// #v1
 	// Clusterroles
 	{
 		group.GET("/apis/rbac.authorization.k8s.io/v1/clusterroles", ClusterRoleList)
 		group.GET("/apis/rbac.authorization.k8s.io/v1/namespaces/:namespace/clusterroles/:name", ClusterRoleGet)
-		// group.POST("/apis/rbac.authorization.k8s/v1/")
+		group.POST("/apis/rbac.authorization.k8s.io/v1/clusterroles", workloadsAPI.Apply)
 	}
 
 	// RoleBinding
 	{
 		group.GET("/apis/rbac.authorization.k8s.io/v1/rolebindings", RoleBindingList)
 		group.GET("/apis/rbac.authorization.k8s.io/v1/namespaces/:namespace/rolebindings/:name", RoleBindingGet)
+		group.POST("/apis/rbac.authorization.k8s.io/v1/namespaces/:namespace/rolebindings", workloadsAPI.Apply)
+	}
+
+	// ClusterRolebind
+	{
+		group.GET("/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", ClusterRoleBindList)
+		group.GET("/apis/rbac.authorization.k8s.io/v1/namespaces/:namespace/clusterrolebindings/:name ", ClusterRoleBindGet)
+		group.POST("/apis/rbac.authorization.k8s.io/v1/namespaces/:namespace/clusterrolebindings", workloadsAPI.Apply)
+	}
+
+	// #policy
+	// #v1beta1
+	// #podsecuritypolicies
+	{
+		group.GET("/apis/policy/v1beta1/podsecuritypolicies", PodSecurityPolicieList)
+		group.GET("/apis/policy/v1beta1/namespaces/:namespace/podsecuritypolicies/:name", PodSecurityPolicieGet)
+		group.POST("/apis/policy/v1beta1/namespaces/:namespace/podsecuritypolicies", workloadsAPI.Apply)
+	}
+
+	// #ovn
+	// #v1
+	// #ips
+	{
+		group.GET("/apis/kubeovn.io/v1/ips", IPList)
+		group.GET("/apis/kubeovn.io/v1/namespaces/:namespace/ips/:name", IPGet)
+	}
+
+	// #subnets
+	{
+		group.GET("/apis/kubeovn.io/v1/subnets", SubNetList)
+		group.GET("/apis/kubeovn.io/v1/namespaces/:namespace/subnets/:name", SubNetGet)
+		group.POST("apis/kubeovn.io/v1/subnets", workloadsAPI.Apply)
 	}
 
 	// #apiextensions.k8s.io/v1beta1
 	// #v1beta1
-
 	// CustomResourceDefinition
 	{
 		group.GET("/apis/apiextensions.k8s.io/v1beta1/customresourcedefinitions", CustomResourceDefinitionList)
 
 		ignores := []string{
-			"fuxi.nip.io/v1/formrenders",
+			"fuxi.nip.io/v1/workloads",
+			"fuxi.nip.io/v1/fields",
+			"fuxi.nip.io/v1/forms",
+			"fuxi.nip.io/v1/pages",
+			"fuxi.nip.io/v1/basedepartments",
+			"fuxi.nip.io/v1/baseroles",
+			"fuxi.nip.io/v1/baseusers",
+			"fuxi.nip.io/v1/tektongraphs",
+			"fuxi.nip.io/v1/tektonwebhooks",
+			"fuxi.nip.io/v1/tektonstores",
 			"nuwa.nip.io/v1/statefulsets",
+			"nuwa.nip.io/v1/stones",
+			"nuwa.nip.io/v1/waters",
+			"nuwa.nip.io/v1/injectors",
+			"tekton.dev/v1alpha1/pipelines",
+			"tekton.dev/v1alpha1/pipelineruns",
+			"tekton.dev/v1alpha1/pipelineresources",
+			"tekton.dev/v1alpha1/tasks",
+			"tekton.dev/v1alpha1/taskruns",
+			"kubeovn.io/v1/ips",
+			"kubeovn.io/v1/subnets",
 		}
 		apiVersions, err := workloadsAPI.ListCustomResourceRouter(ignores)
 		if err != nil {
@@ -285,7 +392,9 @@ func main() {
 		group.GET("/api/v1/namespaces/:namespace", NamespaceGet)
 		group.POST("/api/v1/namespaces", NamespaceCreate)
 		group.DELETE("/api/v1/namespaces/:namespace", NamespaceDelete)
-
+		group.POST("/namespaces/annotation/networkattachment", NamespacePatchAnnotateNetworkAttach)
+		group.POST("/namespaces/annotation/node", NamespacePatchAnnotateNode)
+		group.POST("/namespaces/annotation/storageclass", NamespacePatchAnnotateStorageClass)
 	}
 
 	// post  workload/stack
@@ -293,16 +402,43 @@ func main() {
 		// all resource apply
 		group.POST("/stack", workloadsAPI.Apply)
 
+		// workloads deploy post request
+		group.POST("/deploy", workloadsAPI.Deploy)
 		// other resource  api/apis resource
 		group.DELETE("/api/v1/namespaces/:namespace/:resource/:name", workloadsAPI.Delete)
-		group.DELETE("/apis/:group/:version/namespaces/:namespace/:resource/:name", workloadsAPI.Delete)
+		group.DELETE("/apis/:group/:version/:namespaces_or_resource/:namespace", workloadsAPI.Delete)
+		group.DELETE("/apis/:group/:version/:namespaces_or_resource/:namespace/:resource/:name", workloadsAPI.Delete)
 	}
 
 	// fuxi.nip.io
-	// FormRender
+	// Workloads
 	{
-		group.GET("/apis/fuxi.nip.io/v1/formrenders", FormRenderList)
-		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/formrenders/:name", FormRenderGet)
+		group.GET("/apis/fuxi.nip.io/v1/workloads", WorkloadsTemplateList)
+		// /apis/fuxi.nip.io/v1/namespaces/dxp/workloads
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/workloads", WorkloadsTemplateListSharedNamespace)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/workloads/:name", WorkloadsTemplateGet)
+		group.POST("/apis/fuxi.nip.io/v1/workloads", WorkloadsTemplateCreate)
+	}
+
+	// Field
+	{
+		group.GET("/apis/fuxi.nip.io/v1/fields", FieldList)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/fields/:name", FieldGet)
+		group.POST("/apis/fuxi.nip.io/v1/namespaces/:namespace/fields", FieldCreate)
+	}
+
+	// Form
+	{
+		group.GET("/apis/fuxi.nip.io/v1/forms", FormList)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/forms/:name", FormGet)
+		group.POST("/apis/fuxi.nip.io/v1/namespaces/:namespace/forms", FormCreate)
+	}
+
+	// Page
+	{
+		group.GET("/apis/fuxi.nip.io/v1/pages", PageList)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/pages/:name", PageGet)
+		group.POST("/apis/fuxi.nip.io/v1/namespaces/:namespace/pages", PageCreate)
 	}
 
 	// Metrics
@@ -329,9 +465,140 @@ func main() {
 			})
 		})
 	}
+
+	// tekton.dev
+	// v1alpha1
+	{
+		// pipeline
+		group.GET("/apis/tekton.dev/v1alpha1/pipelines", PipelineList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelines", PipelineList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelines/:name", PipelineGet)
+		group.POST("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelines", workloadsAPI.Apply)
+		group.PUT("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelines/:name", workloadsAPI.Apply)
+
+		// pipelineRun
+		group.GET("/apis/tekton.dev/v1alpha1/pipelineruns", PipelineRunList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelineruns", PipelineRunList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelineruns/:name", PipelineRunGet)
+		group.POST("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelineruns", workloadsAPI.Apply)
+
+		// task
+		group.GET("/apis/tekton.dev/v1alpha1/tasks", TaskList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/tasks", TaskList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/tasks/:name", TaskGet)
+		group.POST("/apis/tekton.dev/v1alpha1/namespaces/:namespace/tasks", workloadsAPI.Apply)
+
+		// taskRun
+		group.GET("/apis/tekton.dev/v1alpha1/taskruns", TaskRunList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/taskruns", TaskRunList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/taskruns/:name", TaskRunGet)
+
+		// pipelineResource
+		group.GET("/apis/tekton.dev/v1alpha1/pipelineresources", PipelineResourceList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelineresources", PipelineResourceList)
+		group.GET("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelineresources/:name", PipelineResourceGet)
+		group.POST("/apis/tekton.dev/v1alpha1/namespaces/:namespace/pipelineresources", workloadsAPI.Apply)
+
+	}
+
+	// TektonGraph
+	{
+		group.GET("/apis/fuxi.nip.io/v1/tektongraphs", TektonGraphList)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/tektongraphs", TektonGraphList)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/tektongraphs/:name", TektonGraphGet)
+		group.POST("/apis/fuxi.nip.io/v1/namespaces/:namespace/tektongraphs", TektonGraphCreate)
+	}
+
+	// TektonStore
+	{
+		group.GET("/apis/fuxi.nip.io/v1/tektonstores", TektonStoreList)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/tektonstores", TektonStoreList)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/tektonstores/:name", TektonStoreGet)
+		group.POST("/apis/fuxi.nip.io/v1/namespaces/:namespace/tektonstores", TektonStoreCreate)
+	}
+
+	// TektonWebHook
+	{
+		group.GET("/apis/fuxi.nip.io/v1/tektonwebhooks", TektonWebHookList)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/tektonwebhooks", TektonWebHookList)
+		group.GET("/apis/fuxi.nip.io/v1/namespaces/:namespace/tektonwebhooks/:name", TektonWebHookGet)
+		group.POST("/apis/fuxi.nip.io/v1/namespaces/:namespace/tektonwebhooks", TektonWebHookCreate)
+	}
+
+	//Istio networking gateways
+	{
+		group.GET("/apis/networking.istio.io/v1beta1/gateways/", GatewayList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/gateways", GatewayList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/gateways/:name", GetGateway)
+		group.POST("/apis/networking.istio.io/v1beta1/namespaces/:namespace/gateways", workloadsAPI.Apply)
+	}
+
+	//Istio networking virtualservices
+	{
+		group.GET("/apis/networking.istio.io/v1beta1/virtualservices/", VirtualServiceList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/virtualservices", VirtualServiceList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/virtualservices/:name", GetVirtualService)
+		group.POST("/apis/networking.istio.io/v1beta1/namespaces/:namespace/virtualservices", workloadsAPI.Apply)
+	}
+
+	//Istio networking destinationrules
+	{
+		group.GET("/apis/networking.istio.io/v1beta1/destinationrules/", DestinationRuleList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/destinationrules", DestinationRuleList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/destinationrules/:name", GetDestinationRule)
+		group.POST("/apis/networking.istio.io/v1beta1/namespaces/:namespace/destinationrules", workloadsAPI.Apply)
+	}
+
+	//Istio networking serviceentry
+	{
+		group.GET("/apis/networking.istio.io/v1beta1/serviceentrys/", ServiceEntryList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/serviceentrys", ServiceEntryList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/serviceentrys/:name", GetServiceEntry)
+		group.POST("/apis/networking.istio.io/v1beta1/namespaces/:namespace/serviceentrys", workloadsAPI.Apply)
+	}
+
+	//Istio networking workloadentries
+	{
+		group.GET("/apis/networking.istio.io/v1beta1/workloadentries/", WorkloadEntryList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/workloadentries", WorkloadEntryList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/workloadentries/:name", GetWorkloadEntry)
+		group.POST("/apis/networking.istio.io/v1beta1/namespaces/:namespace/workloadentries", workloadsAPI.Apply)
+	}
+
+	//Istio networking sidecars
+	{
+		group.GET("/apis/networking.istio.io/v1beta1/sidecars/", SidecarList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/sidecars", SidecarList)
+		group.GET("/apis/networking.istio.io/v1beta1/namespaces/:namespace/sidecars/:name", GetSidecar)
+		group.POST("/apis/networking.istio.io/v1beta1/namespaces/:namespace/sidecars", workloadsAPI.Apply)
+	}
+
+	{
+		group.GET("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions/", NetworkAttachmentDefinitionList)
+		group.GET("/apis/k8s.cni.cncf.io/v1/namespaces/:namespace/network-attachment-definitions", NetworkAttachmentDefinitionList)
+		group.GET("/apis/k8s.cni.cncf.io/v1/namespaces/:namespace/network-attachment-definitions/:name", NetworkAttachmentDefinitionGet)
+		group.POST("/apis/k8s.cni.cncf.io/v1/namespaces/:namespace/network-attachment-definitions", workloadsAPI.Apply)
+		group.POST("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions", workloadsAPI.Apply)
+	}
+
 	// watch the group resource
 	{
 		group.GET("/watch", WatchStream)
+	}
+	{
+		group.GET("/v2/charts", ListCharts)
+		group.GET("/v2/charts/:repo/:chart", GetCharts)
+		group.GET("/v2/charts/:repo/:chart/values", GetChartValues)
+
+		group.GET("/v2/releases", ListRelease)
+		group.POST("/v2/releases", InstallChart)
+		group.GET("/v2/releases/:namespace", FindReleasesByNamespace)
+		group.GET("/v2/releases/:namespace/:release", FindReleaseByNamespace)
+		group.GET("/v2/releases/:namespace/:release/values", FindReleaseValueByName)
+		group.DELETE("/v2/releases/:namespace/:release", DeleteRelease)
+		group.PUT("/v2/releases/:namespace/:release", UpgradeRelease)
+		group.PUT("/v2/releases/:namespace/:release/rollback", RollbackRelease)
+		group.GET("/v2/releases/:namespace/:release/history", HistoryRelease)
 	}
 
 	// Swag

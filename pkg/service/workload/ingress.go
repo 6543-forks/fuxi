@@ -1,13 +1,16 @@
 package workload
 
-import dyn "github.com/yametech/fuxi/pkg/kubernetes/client"
+import (
+	"github.com/yametech/fuxi/pkg/kubernetes/types"
+	"github.com/yametech/fuxi/pkg/service/common"
+)
 
 // Ingress the kubernetes native resource ingress
 type Ingress struct {
-	WorkloadsResourceHandler
+	common.WorkloadsResourceHandler
 }
 
 // NewIngress exported
 func NewIngress() *Ingress {
-	return &Ingress{&defaultImplWorkloadsResourceHandler{ dyn.ResourceIngress}}
+	return &Ingress{&common.DefaultImplWorkloadsResourceHandler{types.ResourceIngress}}
 }

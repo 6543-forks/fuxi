@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"github.com/yametech/fuxi/pkg/api/common"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -14,8 +15,7 @@ func (w *WorkloadsAPI) GetCronJob(g *gin.Context) {
 	name := g.Param("name")
 	item, err := w.cronJob.Get(namespace, name)
 	if err != nil {
-		g.JSON(http.StatusBadRequest,
-			gin.H{code: http.StatusBadRequest, data: "", msg: err.Error(), status: "Request bad parameter"})
+		common.ResourceNotFoundError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, item)
@@ -23,19 +23,19 @@ func (w *WorkloadsAPI) GetCronJob(g *gin.Context) {
 
 // List CronJob
 func (w *WorkloadsAPI) ListCronJob(g *gin.Context) {
-	list, err := w.cronJob.List("", "", 0, 0, nil)
+	list, err := resourceList(g, w.cronJob)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	cronJobList := &v1beta1.CronJobList{}
 	marshalData, err := json.Marshal(list)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	if err = json.Unmarshal(marshalData, cronJobList); err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, cronJobList)

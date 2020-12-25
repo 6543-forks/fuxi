@@ -1,15 +1,16 @@
 package workload
 
 import (
-	dyn "github.com/yametech/fuxi/pkg/kubernetes/client"
+	"github.com/yametech/fuxi/pkg/kubernetes/types"
+	"github.com/yametech/fuxi/pkg/service/common"
 )
 
 type Namespace struct {
-	WorkloadsResourceHandler
+	common.WorkloadsResourceHandler
 }
 
 // NewNode exported
 func NewNamespace() *Namespace {
-	return &Namespace{&defaultImplWorkloadsResourceHandler{
-		dyn.ResourceNamespace}}
+	return &Namespace{&common.DefaultImplWorkloadsResourceHandler{
+		types.ResourceNamespace}}
 }

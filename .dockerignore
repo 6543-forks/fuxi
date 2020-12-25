@@ -1,0 +1,11 @@
+.github
+build/
+dist/
+wireframes/
+backup
+.vscode
+.env
+/tslint.json
+*.DS_Store
+docker-compose.yml
+vendor/

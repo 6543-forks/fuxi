@@ -1,14 +1,17 @@
 package workload
 
-import dyn "github.com/yametech/fuxi/pkg/kubernetes/client"
+import (
+	"github.com/yametech/fuxi/pkg/kubernetes/types"
+	"github.com/yametech/fuxi/pkg/service/common"
+)
 
 type Node struct {
-	WorkloadsResourceHandler
+	common.WorkloadsResourceHandler
 }
 
 // NewNode exported
 func NewNode() *Node {
-	return &Node{&defaultImplWorkloadsResourceHandler{
-		dyn.ResourceNode,
+	return &Node{&common.DefaultImplWorkloadsResourceHandler{
+		types.ResourceNode,
 	}}
 }

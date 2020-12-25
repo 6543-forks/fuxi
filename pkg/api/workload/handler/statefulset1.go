@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/gin-gonic/gin"
+	"github.com/yametech/fuxi/pkg/api/common"
 	nuwav1 "github.com/yametech/nuwa/api/v1"
 	"net/http"
 )
@@ -14,7 +15,7 @@ func (w *WorkloadsAPI) GetStatefulSet1(g *gin.Context) {
 
 	item, err := w.statefulSet1.Get(namespace, name)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ResourceNotFoundError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, item)
@@ -22,20 +23,20 @@ func (w *WorkloadsAPI) GetStatefulSet1(g *gin.Context) {
 
 // List StatefulSet
 func (w *WorkloadsAPI) ListStatefulSet1(g *gin.Context) {
-	list, err := w.statefulSet1.List("", "", 0, 0, nil)
+	list, err := resourceList(g, w.statefulSet1)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	statefulSetList := &nuwav1.StatefulSetList{}
 	marshalData, err := json.Marshal(list)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	err = json.Unmarshal(marshalData, statefulSetList)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, statefulSetList)

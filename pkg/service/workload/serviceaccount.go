@@ -1,15 +1,18 @@
 package workload
 
-import dyn "github.com/yametech/fuxi/pkg/kubernetes/client"
+import (
+	"github.com/yametech/fuxi/pkg/kubernetes/types"
+	"github.com/yametech/fuxi/pkg/service/common"
+)
 
 // ServiceAccount the kubernetes native service account
 type ServiceAccount struct {
-	WorkloadsResourceHandler
+	common.WorkloadsResourceHandler
 }
 
 // NewServiceAccount exported
 func NewServiceAccount() *ServiceAccount {
-	return &ServiceAccount{&defaultImplWorkloadsResourceHandler{
-		dyn.ResourceServiceAccount,
+	return &ServiceAccount{&common.DefaultImplWorkloadsResourceHandler{
+		types.ResourceServiceAccount,
 	}}
 }

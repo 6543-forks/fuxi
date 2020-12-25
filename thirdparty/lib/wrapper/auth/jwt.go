@@ -1,35 +1,69 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 
-	"github.com/micro/go-micro/util/log"
 	"github.com/micro/micro/plugin"
+	"github.com/yametech/fuxi/common"
 	"github.com/yametech/fuxi/thirdparty/lib/token"
-	"github.com/yametech/fuxi/thirdparty/lib/whitelist"
 )
 
+type PrivateCheckerType func(username string, w http.ResponseWriter, r *http.Request) bool
+
 // JWTAuthWrapper
-func JWTAuthWrapper(token *token.Token, whitelist *whitelist.Whitelist) plugin.Handler {
+func JWTAuthWrapper(token *token.Token, privateHandle PrivateCheckerType, loginHandler http.Handler) plugin.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// TODO dynamic name list from configure server
-			if whitelist.In(r.URL.Path) {
-				log.Infof("url (%s) in white list", r.URL.Path)
+			//var tokenHeader string
+			if r.URL.Path == "/user-login" {
+				loginHandler.ServeHTTP(w, r)
+				return
+			}
+
+			if strings.Contains(r.URL.Path, "/workload/shell/pod") {
 				h.ServeHTTP(w, r)
 				return
 			}
+
+			if strings.Contains(r.URL.Path, "/webhook") {
+				h.ServeHTTP(w, r)
+				return
+			}
+
 			tokenHeader := r.Header.Get("Authorization")
 			userFromToken, e := token.Decode(tokenHeader)
-
 			if e != nil {
-				log.Infof(`Jwt auth wrapper decode token error key "%s"`, tokenHeader)
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 
-			r.Header.Set("x-auth-username", userFromToken.UserName)
+			if !privateHandle(userFromToken.UserName, w, r) {
+				writeResponse(w, http.StatusBadRequest, fmt.Sprintf("not allow access uri %s", r.URL.Path))
+				return
+			}
+
+			r.Header.Set(common.HttpRequestUserHeaderKey, userFromToken.UserName)
+			// Config
+			if r.Method == http.MethodGet && r.URL.Path == "/config" {
+				loginHandler.ServeHTTP(w, r)
+				return
+			}
 			h.ServeHTTP(w, r)
 		})
 	}
+}
+
+func writeResponse(w http.ResponseWriter, status int, data interface{}) {
+	var _data []byte
+	switch data.(type) {
+	case string:
+		_data = []byte(data.(string))
+	case []byte:
+		_data = data.([]byte)
+	}
+	w.WriteHeader(status)
+	w.Write(_data)
+	return
 }

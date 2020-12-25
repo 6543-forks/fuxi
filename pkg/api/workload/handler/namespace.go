@@ -2,40 +2,195 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
+	consts "github.com/yametech/fuxi/common"
+	"github.com/yametech/fuxi/pkg/api/common"
+	nuwav1 "github.com/yametech/nuwa/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"net/http"
 )
+
+type patchAnnotateData struct {
+	Namespace         string   `json:"namespace"`
+	Nodes             []string `json:"nodes"`
+	StorageClasses    []string `json:"storageClasses"`
+	NetworkAttachment string   `json:"networkAttachment"`
+}
+
+func jsonPatchData(o interface{}) (string, error) {
+	bs, err := json.Marshal(o)
+	if err != nil {
+		return "", err
+	}
+	return string(bs), nil
+}
+
+func (w *WorkloadsAPI) PatchAnnotateStorageClassNamespace(g *gin.Context) {
+	rawData, err := g.GetRawData()
+	if err != nil {
+		common.ToRequestParamsError(g, err)
+		return
+	}
+	pad := patchAnnotateData{}
+	err = json.Unmarshal(rawData, &pad)
+	if err != nil {
+		common.ToRequestParamsError(g, err)
+		return
+	}
+	patchNodeListValue, err := jsonPatchData(pad.StorageClasses)
+	if err != nil {
+		common.ToInternalServerError(g, "", err)
+		return
+	}
+	patchData := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"annotations": map[string]string{
+				consts.NamespaceAnnotationForStorageClass: patchNodeListValue,
+			},
+		},
+	}
+	_, err = w.namespace.Patch("", pad.Namespace, patchData)
+	if err != nil {
+		common.ToInternalServerError(g, "", err)
+		return
+	}
+
+	g.JSON(http.StatusOK, "")
+}
+
+func (w *WorkloadsAPI) PatchAnnotateNetworkAttach(g *gin.Context) {
+	rawData, err := g.GetRawData()
+	if err != nil {
+		common.ToRequestParamsError(g, err)
+		return
+	}
+	pad := patchAnnotateData{}
+	err = json.Unmarshal(rawData, &pad)
+	if err != nil {
+		common.ToRequestParamsError(g, err)
+		return
+	}
+
+	if err != nil {
+		common.ToInternalServerError(g, "", err)
+		return
+	}
+	patchData := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"annotations": map[string]string{
+				consts.NamespaceAnnotationForNetworkAttach: pad.NetworkAttachment,
+			},
+		},
+	}
+	_, err = w.namespace.Patch("", pad.Namespace, patchData)
+	if err != nil {
+		common.ToInternalServerError(g, "", err)
+		return
+	}
+
+	g.JSON(http.StatusOK, "")
+}
+
+func (w *WorkloadsAPI) PatchAnnotateNodeNamespace(g *gin.Context) {
+	rawData, err := g.GetRawData()
+	if err != nil {
+		common.ToRequestParamsError(g, err)
+		return
+	}
+	pad := patchAnnotateData{}
+	err = json.Unmarshal(rawData, &pad)
+	if err != nil {
+		common.ToRequestParamsError(g, err)
+		return
+	}
+	cords := make(nuwav1.Coordinates, 0)
+	for _, nodeName := range pad.Nodes {
+		obj, err := w.node.Get("", nodeName)
+		if err != nil {
+			common.ToRequestParamsError(g, err)
+			return
+		}
+		nodeUnstructured := obj.(*unstructured.Unstructured)
+		node := &corev1.Node{}
+		if err = runtime.DefaultUnstructuredConverter.FromUnstructured(nodeUnstructured.Object, node); err != nil {
+			common.ToRequestParamsError(g, err)
+			return
+		}
+		cord := nuwav1.Coordinate{}
+		if labels := node.GetLabels(); labels != nil {
+			zone, exist := labels[nuwav1.NuwaZoneFlag]
+			if !exist {
+				common.ToInternalServerError(g, "", fmt.Errorf("node %s not label nuwa zone", node.GetName()))
+				return
+			}
+			cord.Zone = zone
+			rack, exist := labels[nuwav1.NuwaRackFlag]
+			if !exist {
+				common.ToInternalServerError(g, "", fmt.Errorf("node %s not label nuwa rack", node.GetName()))
+				return
+			}
+			cord.Rack = rack
+			host, exist := labels[nuwav1.NuwaHostFlag]
+			if !exist {
+				common.ToInternalServerError(g, "", fmt.Errorf("node %s not label nuwa host", node.GetName()))
+				return
+			}
+			cord.Host = host
+		}
+		cords = append(cords, cord)
+	}
+	patchNodeListValue, err := jsonPatchData(cords)
+	if err != nil {
+		common.ToInternalServerError(g, "", err)
+		return
+	}
+	patchData := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"annotations": map[string]string{
+				nuwav1.NuwaLimitFlag: patchNodeListValue,
+			},
+		},
+	}
+	_, err = w.namespace.Patch("", pad.Namespace, patchData)
+	if err != nil {
+		common.ToInternalServerError(g, "", err)
+		return
+	}
+
+	g.JSON(http.StatusOK, "")
+}
 
 // Create Namespace
 func (w *WorkloadsAPI) CreateNamespace(g *gin.Context) {
 	rawData, err := g.GetRawData()
 	if err != nil {
-		toRequestParamsError(g, err)
+		common.ToRequestParamsError(g, err)
 		return
 	}
 
 	obj := corev1.Namespace{}
 	err = json.Unmarshal(rawData, &obj)
 	if err != nil {
-		toRequestParamsError(g, err)
+		common.ToRequestParamsError(g, err)
 		return
 	}
 
 	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&obj)
 	if err != nil {
-		toRequestParamsError(g, err)
+		common.ToRequestParamsError(g, err)
 		return
 	}
 
 	unstructuredStruct := &unstructured.Unstructured{
 		Object: unstructuredObj,
 	}
-	newObj, err := w.namespace.Apply("", obj.Name, unstructuredStruct)
+	newObj, _, err := w.namespace.Apply("", obj.Name, unstructuredStruct)
 	if err != nil {
-		toRequestParamsError(g, err)
+		common.ToRequestParamsError(g, err)
 		return
 	}
 
@@ -47,7 +202,7 @@ func (w *WorkloadsAPI) DeleteNamespace(g *gin.Context) {
 	namespaceName := g.Param("namespace")
 	err := w.namespace.Delete("", namespaceName)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, "")
@@ -58,10 +213,9 @@ func (w *WorkloadsAPI) GetNamespace(g *gin.Context) {
 	namespaceName := g.Param("namespace")
 	item, err := w.namespace.Get("", namespaceName)
 	if err != nil {
-		toRequestParamsError(g, err)
+		common.ToRequestParamsError(g, err)
 		return
 	}
-
 	g.JSON(http.StatusOK, item)
 }
 
@@ -69,20 +223,20 @@ func (w *WorkloadsAPI) GetNamespace(g *gin.Context) {
 func (w *WorkloadsAPI) ListNamespace(g *gin.Context) {
 	list, err := w.namespace.List("", "", 0, 0, nil)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 
 	namespaceList := &corev1.NamespaceList{}
 	marshalData, err := json.Marshal(list)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 
 	err = json.Unmarshal(marshalData, namespaceList)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, namespaceList)

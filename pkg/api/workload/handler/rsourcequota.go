@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"github.com/gin-gonic/gin"
+	"github.com/yametech/fuxi/pkg/api/common"
 	v1 "k8s.io/api/core/v1"
 	"net/http"
 )
@@ -13,7 +14,7 @@ func (w *WorkloadsAPI) GetResourceQuota(g *gin.Context) {
 	name := g.Param("name")
 	item, err := w.resourceQuota.Get(namespace, name)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ResourceNotFoundError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, item)
@@ -21,20 +22,20 @@ func (w *WorkloadsAPI) GetResourceQuota(g *gin.Context) {
 
 // List ResourceQuota
 func (w *WorkloadsAPI) ListResourceQuota(g *gin.Context) {
-	list, err := w.resourceQuota.List("", "", 0, 0, nil)
+	list, err := resourceList(g, w.resourceQuota)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	resourceQuotaList := &v1.ResourceQuotaList{}
 	marshalData, err := json.Marshal(list)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	err = json.Unmarshal(marshalData, resourceQuotaList)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, resourceQuotaList)

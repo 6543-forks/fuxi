@@ -1,15 +1,18 @@
 package workload
 
-import dyn "github.com/yametech/fuxi/pkg/kubernetes/client"
+import (
+	"github.com/yametech/fuxi/pkg/kubernetes/types"
+	"github.com/yametech/fuxi/pkg/service/common"
+)
 
 // PersistentVolumeClaims the kubernetes native resource persistent volume claims
 type PersistentVolumeClaims struct {
-	WorkloadsResourceHandler
+	common.WorkloadsResourceHandler
 }
 
 // NewPersistentVolumeClaims exported
 func NewPersistentVolumeClaims() *PersistentVolumeClaims {
-	return &PersistentVolumeClaims{&defaultImplWorkloadsResourceHandler{
-		dyn.ResourcePersistentVolumeClaims,
+	return &PersistentVolumeClaims{&common.DefaultImplWorkloadsResourceHandler{
+		types.ResourcePersistentVolumeClaims,
 	}}
 }

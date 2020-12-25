@@ -70,7 +70,16 @@ rules:
   - fuxi.nip.io
   resources:
   - '*'
-  - formrenders
+  - pages
+  - forms
+  - fields
+  - baseroles
+  - basedepartments
+  - baseusers
+  - baserolegroups
+  - baseroleusers
+  - tektongraphs
+  - tektonwebhooks
   verbs:
   - create
   - delete

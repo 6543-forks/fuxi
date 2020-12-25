@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: etcd-script-config
+  namespace: kube-system
+data:
+  put.sh: |
+   #!/bin/bash
+    while true
+      do
+        # if [ `ps -ef | grep etcd |grep -v grep | wc -l` -gt 0 ]
+        # then
+        ETCDCTL_API=3
+        /usr/local/bin/etcdctl put /go/micro/jwt \'{\"key\":\"nishidabendan\"}\' 
+        /usr/local/bin/etcdctl put /go/micro/urls \'{\"list\":[\"/login\"]}\'
+        # fi
+      sleep 100
+      done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: etcd # has to match .spec.template.metadata.labels
+  replicas: 1 # by default is 1
+  template:
+    metadata:
+      labels:
+        app: etcd # has to match .spec.selector.matchLabels
+    spec:
+      containers:
+      - name: etcd-server
+        image: 'yametech/etcd:20200627'
+        args:
+          - etcd
+          - '-name'
+          - etcd1
+          - '-advertise-client-urls=http://0.0.0.0:2379'
+          - '-listen-client-urls=http://0.0.0.0:2379'
+          - '-initial-cluster-state'
+          - new
+        env:
+          - name: ETCDCTL_API
+            value: "3"
+        imagePullPolicy: IfNotPresent
+      - name: etcd-client
+        image: 'yametech/etcd:20200627'
+        args:
+          - sh
+          - '/script/put.sh'
+        env:
+          - name: ETCDCTL_API
+            value: "3"
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: script-config
+          mountPath: /script/put.sh
+          subPath: put.sh
+      volumes:
+      - name: script-config
+        configMap:
+          name: etcd-script-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: etcd
+  name: etcd
+  namespace: kube-system
+spec:
+  ports:
+  - name: "2379"
+    port: 2379
+    targetPort: 2379
+  selector:
+    app: etcd

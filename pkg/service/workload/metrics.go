@@ -1,15 +1,24 @@
 package workload
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
+
+	"github.com/go-resty/resty/v2"
+	constraint_common "github.com/yametech/fuxi/common"
+	"github.com/yametech/fuxi/pkg/service/common"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	metrics "k8s.io/metrics/pkg/apis/metrics"
 )
 
-type Metrics struct{}
+type Metrics struct {
+	client *resty.Client
+}
 
 func NewMetrics() *Metrics {
-	return &Metrics{}
+	return &Metrics{resty.New()}
 }
 
 type MetricsContentMap map[string]interface{}
@@ -22,12 +31,34 @@ func (m *Metrics) ProxyToPrometheus(params map[string]string, body []byte) (map[
 		return nil, err
 	}
 
+	if constraint_common.DeployInCluster {
+		for bodyKey, bodyValue := range bodyMap {
+			resp, err := m.
+				client.
+				R().
+				SetQueryParams(params).
+				SetQueryParam("query", bodyValue).
+				Get("http://prometheus.kube-system.svc.cluster.local/api/v1/query_range")
+			if err != nil {
+				return nil, err
+			}
+			var metricsContextMap MetricsContentMap
+			err = json.Unmarshal([]byte(resp.String()), &metricsContextMap)
+			if err != nil {
+				return nil, err
+			}
+			resultMap[bodyKey] = metricsContextMap
+		}
+		return resultMap, nil
+	}
+
 	for bodyKey, bodyValue := range bodyMap {
-		req := sharedK8sClient.clientSetV1.
+		req := common.SharedK8sClient.
+			ClientV1.
 			CoreV1().
 			RESTClient().
 			Get().
-			Namespace("lens-metrics").
+			Namespace("kube-system").
 			Resource("services").
 			Name("prometheus:80").
 			SubResource("proxy").
@@ -38,10 +69,11 @@ func (m *Metrics) ProxyToPrometheus(params map[string]string, body []byte) (map[
 		}
 		req.Param("query", bodyValue)
 
-		raw, err := req.DoRaw()
+		raw, err := req.DoRaw(context.Background())
 		if err != nil {
 			return nil, err
 		}
+
 		var metricsContextMap MetricsContentMap
 		err = json.Unmarshal(raw, &metricsContextMap)
 		if err != nil {
@@ -49,35 +81,65 @@ func (m *Metrics) ProxyToPrometheus(params map[string]string, body []byte) (map[
 		}
 		resultMap[bodyKey] = metricsContextMap
 	}
-
 	return resultMap, nil
 }
 
-func (m *Metrics) GetPodMetrics(namespace, name string, pods *metrics.PodMetrics) error {
+type PodMetrics struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
+
+	// The following fields define time interval from which metrics were
+	// collected from the interval [Timestamp-Window, Timestamp].
+	Timestamp metav1.Time     `json:"timestamp"`
+	Window    metav1.Duration `json:"window"`
+
+	// Metrics for all containers are collected within the same time window.
+	Containers []ContainerMetrics `json:"containers"`
+}
+
+// resource usage metrics of a container.
+type ContainerMetrics struct {
+	// Container name corresponding to the one from pod.spec.containers.
+	Name string `json:"name"`
+	// The memory usage is the memory working set.
+	Usage corev1.ResourceList `json:"usage"`
+}
+
+func (m *Metrics) GetPodMetrics(namespace, name string, pods *PodMetrics) error {
 	uri := fmt.Sprintf("apis/metrics.k8s.io/v1beta1/%s/%s/pods", namespace, name)
-	data, err := sharedK8sClient.
-		clientSetV1.
+	data, err := common.SharedK8sClient.
+		ClientV1.
 		RESTClient().
 		Get().
 		AbsPath(uri).
-		DoRaw()
+		DoRaw(context.Background())
 	if err != nil {
 		return err
 	}
 	return json.Unmarshal(data, &pods)
 }
 
-func (m *Metrics) GetPodMetricsList(namespace string, pods *metrics.PodMetricsList) error {
+type PodMetricsList struct {
+	metav1.TypeMeta `json:",inline"`
+	// Standard list metadata.
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+	metav1.ListMeta `json:"metadata,omitempty"`
+
+	// List of pod metrics.
+	Items []PodMetrics `json:"items"`
+}
+
+func (m *Metrics) GetPodMetricsList(namespace string, pods *PodMetricsList) error {
 	uri := "apis/metrics.k8s.io/v1beta1/pods"
 	if namespace != "" {
 		uri = fmt.Sprintf("apis/metrics.k8s.io/v1beta1/namespaces/%s/pods", namespace)
 	}
-	data, err := sharedK8sClient.
-		clientSetV1.
+	data, err := common.SharedK8sClient.
+		ClientV1.
 		RESTClient().
 		Get().
 		AbsPath(uri).
-		DoRaw()
+		DoRaw(context.Background())
 	if err != nil {
 		return err
 	}
@@ -85,12 +147,12 @@ func (m *Metrics) GetPodMetricsList(namespace string, pods *metrics.PodMetricsLi
 }
 
 func (m *Metrics) GetNodeMetricsList(nodes *metrics.NodeMetricsList) error {
-	data, err := sharedK8sClient.
-		clientSetV1.
+	data, err := common.SharedK8sClient.
+		ClientV1.
 		RESTClient().
 		Get().
 		AbsPath("apis/metrics.k8s.io/v1beta1/nodes").
-		DoRaw()
+		DoRaw(context.Background())
 	if err != nil {
 		return err
 	}

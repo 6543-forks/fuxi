@@ -3,7 +3,8 @@ package handler
 import (
 	"encoding/json"
 	"github.com/gin-gonic/gin"
-	dyn "github.com/yametech/fuxi/pkg/kubernetes/client"
+	"github.com/yametech/fuxi/pkg/api/common"
+	"github.com/yametech/fuxi/pkg/kubernetes/types"
 	"net/http"
 )
 
@@ -12,10 +13,10 @@ func (w *WorkloadsAPI) GetDeploymentScale(g *gin.Context) {
 	namespace := g.Param("namespace")
 	name := g.Param("name")
 
-	w.generic.SetGroupVersionResource(dyn.ResourceDeployment)
-	item, err := w.generic.RemoteGet(namespace, name, "scale")
+	w.generic.SetGroupVersionResource(types.ResourceDeployment)
+	item, err := w.generic.Get(namespace, name, "scale")
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ResourceNotFoundError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, item)
@@ -28,20 +29,20 @@ func (w *WorkloadsAPI) PutDeploymentScale(g *gin.Context) {
 
 	rawData, err := g.GetRawData()
 	if err != nil {
-		toRequestParamsError(g, err)
+		common.ToRequestParamsError(g, err)
 		return
 	}
 	pathData := make(map[string]interface{})
 	err = json.Unmarshal(rawData, &pathData)
 	if err != nil {
-		toRequestParamsError(g, err)
+		common.ToRequestParamsError(g, err)
 		return
 	}
 
-	w.generic.SetGroupVersionResource(dyn.ResourceDeployment)
-	_, err = w.generic.Path(namespace, name, pathData)
+	w.generic.SetGroupVersionResource(types.ResourceDeployment)
+	_, err = w.generic.Patch(namespace, name, pathData)
 	if err != nil {
-		toInternalServerError(g, "", err)
+		common.ToInternalServerError(g, "", err)
 		return
 	}
 	g.JSON(http.StatusOK, "")

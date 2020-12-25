@@ -1,16 +1,17 @@
 package workload
 
 import (
-	dyn "github.com/yametech/fuxi/pkg/kubernetes/client"
+	"github.com/yametech/fuxi/pkg/kubernetes/types"
+	"github.com/yametech/fuxi/pkg/service/common"
 )
 
 // Deployment the kubernetes native resource deployments
 type Deployment struct {
-	WorkloadsResourceHandler // extended for workloadsResourceHandler
+	common.WorkloadsResourceHandler // extended for workloadsResourceHandler
 }
 
 func NewDeployment() *Deployment {
-	return &Deployment{&defaultImplWorkloadsResourceHandler{
-		dyn.ResourceDeployment,
+	return &Deployment{&common.DefaultImplWorkloadsResourceHandler{
+		types.ResourceDeployment,
 	}}
 }
