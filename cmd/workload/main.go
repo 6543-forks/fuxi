@@ -392,6 +392,7 @@ func main() {
 		group.GET("/api/v1/namespaces/:namespace", NamespaceGet)
 		group.POST("/api/v1/namespaces", NamespaceCreate)
 		group.DELETE("/api/v1/namespaces/:namespace", NamespaceDelete)
+		group.PUT("/api/v1/namespaces/:namespace/:name/annotation", NamespacePatchAnnotateNode)
 		group.POST("/namespaces/annotation/node", NamespacePatchAnnotateNode)
 		group.POST("/namespaces/annotation/storageclass", NamespacePatchAnnotateStorageClass)
 	}

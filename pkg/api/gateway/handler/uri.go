@@ -24,7 +24,6 @@ import (
 type APIType uint8
 
 const (
-
 	/*
 		/{service}/api/v1/namespaces/{namespace_name}
 		eg: /workload/api/v1/namespaces
